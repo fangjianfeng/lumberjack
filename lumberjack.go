@@ -44,6 +44,10 @@ const (
 // ensure we always implement io.WriteCloser
 var _ io.WriteCloser = (*Logger)(nil)
 
+type Clock interface {
+	After(u time.Time) bool
+}
+
 // Logger is an io.WriteCloser that writes to the specified filename.
 //
 // Logger opens or creates the logfile on first Write.  If the file exists and
@@ -98,6 +102,9 @@ type Logger struct {
 	// deleted.)
 	MaxBackups int `json:"maxbackups" yaml:"maxbackups"`
 
+	RotationTime time.Duration  `json:"rotation_time" yaml:"maxbackups"`
+	Clock Clock `json:"clock" yaml:"clock"`
+
 	// LocalTime determines if the time used for formatting the timestamps in
 	// backup files is the computer's local time.  The default is to use UTC
 	// time.
@@ -126,6 +133,7 @@ var (
 	// variable so tests can mock it out and not need to write megabytes of data
 	// to disk.
 	megabyte = 1024 * 1024
+    cstSh, _ = time.LoadLocation("Asia/Shanghai")
 )
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
@@ -149,7 +157,8 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 		}
 	}
 
-	if l.size+writeLen > l.max() {
+	cutoff := time.Now().In(cstSh).Add(-1 * l.RotationTime)
+	if l.size+writeLen > l.max() || l.Clock.After(cutoff){
 		if err := l.rotate(); err != nil {
 			return 0, err
 		}
@@ -238,6 +247,7 @@ func (l *Logger) openNew() error {
 	}
 	l.file = f
 	l.size = 0
+	l.Clock = time.Now().In(cstSh)
 	return nil
 }
 
@@ -254,7 +264,7 @@ func backupName(name string, local bool) string {
 		t = t.UTC()
 	}
 
-	timestamp := t.Format(backupTimeFormat)
+	timestamp := t.In(cstSh).Format(backupTimeFormat)
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
 }
 
@@ -438,7 +448,7 @@ func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
 		return time.Time{}, errors.New("mismatched extension")
 	}
 	ts := filename[len(prefix) : len(filename)-len(ext)]
-	return time.Parse(backupTimeFormat, ts)
+	return time.ParseInLocation(backupTimeFormat, ts, cstSh)
 }
 
 // max returns the maximum size in bytes of log files before rolling.
